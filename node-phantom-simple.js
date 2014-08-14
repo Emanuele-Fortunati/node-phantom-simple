@@ -7,6 +7,8 @@ var util            = require('util');
 
 var POLL_INTERVAL   = process.env.POLL_INTERVAL || 500;
 
+var PORT = 45567;
+
 var queue = function (worker) {
     var _q = [];
     var running = false;
@@ -67,7 +69,9 @@ exports.create = function (callback, options) {
         }
         args = args.concat([__dirname + '/bridge.js']);
 
-        var phantom = spawn(options.phantomPath, args);
+        var env = process.env;
+        env.port = PORT;
+        var phantom = spawn(options.phantomPath, args, {env: env});
 
         // Ensure that the child process is closed when this process dies
         var closeChild = function () {
@@ -114,12 +118,15 @@ exports.create = function (callback, options) {
             phantom.stdout.on('data', function (data) {
                 return console.log('phantom stdout: '+data);
             });
-            
+
             var matches = data.toString().match(/Ready \[(\d+)\]/);
             if (!matches) {
                 phantom.kill();
                 return callback("Unexpected output from PhantomJS: " + data);
             }
+console.log('phantom stdout: '+data);
+            callback(null, phantom, PORT);
+            return;
 
             var phantom_pid = parseInt(matches[1], 0);
 
@@ -162,7 +169,7 @@ exports.create = function (callback, options) {
                 }
                 var re = /(?:127\.0\.0\.1|localhost):(\d+)/ig, match;
                 var ports = [];
-                
+
                 while (match = re.exec(stdout)) {
                     ports.push(match[1]);
                 }
@@ -197,7 +204,7 @@ exports.create = function (callback, options) {
         	}
         },100);
     };
-    
+
     spawnPhantom(function (err, phantom, port) {
         if (err) {
             return callback(err);
@@ -280,7 +287,7 @@ exports.create = function (callback, options) {
 
             pages[id] = page;
 
-            return page;            
+            return page;
         }
 
         var poll_func = setup_long_poll(phantom, port, pages, setup_new_page);
@@ -291,7 +298,7 @@ exports.create = function (callback, options) {
             var page = params[0];
             var method = params[1];
             var args = params.slice(2);
-            
+
             var http_opts = {
                 hostname: '127.0.0.1',
                 port: port,
@@ -317,7 +324,7 @@ exports.create = function (callback, options) {
                     }
                     var results = JSON.parse(data);
                     // console.log("Response: ", results);
-                    
+
                     if (err) {
                         next();
                         return callback(results);
@@ -326,7 +333,7 @@ exports.create = function (callback, options) {
                     if (method === 'createPage') {
                         var id = results.page_id;
                         var page = setup_new_page(id);
-                        
+
                         next();
                         return callback(null, page);
                     }
@@ -382,7 +389,7 @@ exports.create = function (callback, options) {
                 phantom.on.apply(phantom, arguments);
             },
         };
-        
+
         callback(null, proxy);
     });
 }

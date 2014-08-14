@@ -49,7 +49,7 @@ function include_js (res, page, args) {
 	}));
 }
 
-var service = webserver.listen('127.0.0.1:0', function (req, res) {
+var service = webserver.listen('127.0.0.1:' + system.env.port, function (req, res) {
 	// console.log("Got a request of type: " + req.method);
 	if (req.method === 'GET') {
 		res.statusCode = 200;
@@ -186,4 +186,4 @@ var global_methods = {
 	},
 }
 
-console.log("Ready [" + system.pid + "]");
+console.log("Ready [" + system.env.port + "]");
