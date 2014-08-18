@@ -49,7 +49,7 @@ function include_js (res, page, args) {
 	}));
 }
 
-var service = webserver.listen('127.0.0.1:' + system.env.port, function (req, res) {
+var service = webserver.listen('127.0.0.1:80'/*  + system.env.port */, function (req, res) {
 	// console.log("Got a request of type: " + req.method);
 	if (req.method === 'GET') {
 		res.statusCode = 200;
@@ -107,6 +107,20 @@ var service = webserver.listen('127.0.0.1:' + system.env.port, function (req, re
 		throw "Unknown request type!";
 	}
 });
+var asd = "";
+for(var propertyName in service) {
+    asd += " " + propertyName;
+}
+console.log(asd + "Port busy [" + system.env.port + "]");
+
+/*
+service.on("error", function() {
+   console.log("Port busy [" + system.env.port + "]");
+   return;
+});
+*/
+
+
 
 var callbacks = [
 	'onAlert', 'onCallback', 'onClosing', 'onConfirm', 'onConsoleMessage', 'onError', 'onFilePicker',
@@ -186,4 +200,4 @@ var global_methods = {
 	},
 }
 
-console.log("Ready [" + system.env.port + "]");
+console.log("Ready [" + system.pid + "]");

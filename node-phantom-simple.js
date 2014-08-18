@@ -1,13 +1,12 @@
 "use strict";
 
-var http            = require('http');
-var spawn 			= require('child_process').spawn;
-var exec            = require('child_process').exec;
-var util            = require('util');
+var http            = require('http'),
+    spawn 			= require('child_process').spawn,
+    util            = require('util'),
+    net             = require('net');
 
-var POLL_INTERVAL   = process.env.POLL_INTERVAL || 500;
-
-var PORT = 45567;
+var POLL_INTERVAL   = process.env.POLL_INTERVAL || 500,
+    MAX_PORT_TRIALS = 10;
 
 var queue = function (worker) {
     var _q = [];
@@ -58,9 +57,9 @@ function wrapArray(arr) {
 }
 
 exports.create = function (callback, options) {
-    if (options === undefined) options = {};
-    if (options.phantomPath === undefined) options.phantomPath = 'phantomjs';
-    if (options.parameters === undefined) options.parameters = {};
+    options = options || {};
+    options.phantomPath = options.phantomPath || 'phantomjs';
+    options.parameters = options.parameters || {};
 
     function spawnPhantom (callback) {
         var args=[];
@@ -69,140 +68,129 @@ exports.create = function (callback, options) {
         }
         args = args.concat([__dirname + '/bridge.js']);
 
-        var env = process.env;
-        env.port = PORT;
-        var phantom = spawn(options.phantomPath, args, {env: env});
+        var startPhantom = function(onPortError) {
 
-        // Ensure that the child process is closed when this process dies
-        var closeChild = function () {
-            try {
-                phantom.kill();
-            } catch(e) {}
-            process.exit(1);
-        };
+            var phantom = spawn(options.phantomPath, args, {env: env});
 
-        var uncaughtHandler = function (err) {
-            console.error(err.stack);
-            closeChild();
-        };
+            // Ensure that the child process is closed when this process dies
+            var closeChild = function () {
+                try {
+                    phantom.kill();
+                } catch(e) {}
+                process.exit(1);
+            };
 
-        // Note it's possible to blow up maxEventListeners doing this - consider moving to a single handler.
-        ['SIGINT', 'SIGTERM'].forEach(function(sig) {
-            process.on(sig, closeChild);
-        });
+            var uncaughtHandler = function (err) {
+                console.error(err.stack);
+                closeChild();
+            };
 
-        process.on('uncaughtException', uncaughtHandler);
-
-        phantom.once('error', function (err) {
-        	callback(err);
-        });
-
-        phantom.stderr.on('data', function (data) {
-            if (options.ignoreErrorPattern && options.ignoreErrorPattern.exec(data)) {
-                return;
-            }
-            return console.warn('phantom stderr: '+data);
-        });
-        var exitCode = 0;
-        phantom.once('exit', function (code) {
+            // Note it's possible to blow up maxEventListeners doing this - consider moving to a single handler.
             ['SIGINT', 'SIGTERM'].forEach(function(sig) {
-                process.removeListener(sig, closeChild);
-            });
-            process.removeListener('uncaughtException', uncaughtHandler);
-            exitCode = code;
-        });
-
-        // Wait for "Ready" line
-        phantom.stdout.once('data', function (data) {
-            // setup normal listener now
-            phantom.stdout.on('data', function (data) {
-                return console.log('phantom stdout: '+data);
+                process.on(sig, closeChild);
             });
 
-            var matches = data.toString().match(/Ready \[(\d+)\]/);
-            if (!matches) {
-                phantom.kill();
-                return callback("Unexpected output from PhantomJS: " + data);
-            }
-console.log('phantom stdout: '+data);
-            callback(null, phantom, PORT);
-            return;
+            process.on('uncaughtException', uncaughtHandler);
 
-            var phantom_pid = parseInt(matches[1], 0);
+            phantom.once('error', function (err) {
+            	callback(err);
+            });
 
-            // Now need to figure out what port it's listening on - since
-            // Phantom is busted and can't tell us this we need to use lsof on mac, and netstat on Linux
-            // Note that if phantom could tell you the port it ends up listening
-            // on we wouldn't need to do this - server.port returns 0 when you ask
-            // for port 0 (i.e. random free port). If they ever fix that this will
-            // become much simpler
-            var platform = require('os').platform();
-            var cmd = null;
-            switch (platform) {
-                case 'linux':
-                            cmd = 'netstat -nlp | grep "[[:space:]]%d/"';
-                            break;
-                case 'darwin':
-                            cmd = 'lsof -p %d | grep LISTEN';
-                            break;
-                case 'win32':
-                            cmd = 'netstat -ano | findstr /R "\\<%d\\>"';
-                            break;
-                case 'cygwin':
-                            cmd = 'netstat -ano | grep %d';
-                            break;
-                default:
-                            phantom.kill();
-                            return callback("Your OS is not supported yet. Tell us how to get the listening port based on PID");
-            }
-
-            // We do this twice - first to get ports this process is listening on
-            // and again to get ports phantom is listening on. This is to work
-            // around this bug in libuv: https://github.com/joyent/libuv/issues/962
-            // - this is only necessary when using cluster, but it's here regardless
-            var my_pid_command = util.format(cmd, process.pid);
-
-            exec(my_pid_command, function (err, stdout, stderr) {
-                if (err !== null) {
-                    // This can happen if grep finds no matching lines, so ignore it.
-                    stdout = '';
+            phantom.stderr.on('data', function (data) {
+                if (options.ignoreErrorPattern && options.ignoreErrorPattern.exec(data)) {
+                    return;
                 }
-                var re = /(?:127\.0\.0\.1|localhost):(\d+)/ig, match;
-                var ports = [];
-
-                while (match = re.exec(stdout)) {
-                    ports.push(match[1]);
-                }
-
-                var phantom_pid_command = util.format(cmd, phantom_pid);
-
-                exec(phantom_pid_command, function (err, stdout, stderr) {
-                    if (err !== null) {
-                        phantom.kill();
-                        return callback("Error executing command to extract phantom ports: " + err);
-                    }
-                    var port;
-                    while (match = re.exec(stdout)) {
-                        if (ports.indexOf(match[1]) == -1) {
-                            port = match[1];
-                        }
-                    }
-
-                    if (!port) {
-                        phantom.kill();
-                        return callback("Error extracting port from: " + stdout);
-                    }
-
-                    callback(null, phantom, port);
+                return console.warn('phantom stderr: '+data);
+            });
+            var exitCode = 0;
+            phantom.once('exit', function (code) {
+                ['SIGINT', 'SIGTERM'].forEach(function(sig) {
+                    process.removeListener(sig, closeChild);
                 });
+                process.removeListener('uncaughtException', uncaughtHandler);
+                exitCode = code;
             });
-        });
 
-        setTimeout(function () {    //wait a bit to see if the spawning of phantomjs immediately fails due to bad path or similar
-        	if (exitCode !== 0) {
-        		return callback("Phantom immediately exited with: " + exitCode);
-        	}
-        },100);
+            // Wait for "Ready" line
+            phantom.stdout.once('data', function (data) {
+                // setup normal listener now
+                phantom.stdout.on('data', function (data) {
+                    return console.log('phantom stdout: '+data);
+                });
+
+                var matches = data.toString().match(/Port busy \[(\d+)\]/);
+                if (matches && matches.length > 0) {
+console.log(data.toString());
+                    if(onPortError && typeof onPortError == "function") {
+                        onPortError();
+                    }
+
+                    phantom.kill();
+                    return;
+
+                }
+
+                matches = data.toString().match(/Ready \[(\d+)\]/);
+                if (!matches) {
+                    phantom.kill();
+                    return callback("Unexpected output from PhantomJS: " + data);
+                }
+
+                callback(null, phantom, options.port);
+            });
+
+            setTimeout(function () {    //wait a bit to see if the spawning of phantomjs immediately fails due to bad path or similar
+            	if (exitCode !== 0) {
+            		return callback("Phantom immediately exited with: " + exitCode);
+            	}
+            },100);
+
+        }
+
+        // Set phantom webserver port (use a free random one if user didn't pick one)
+        var env = process.env;
+        if(options.port) {
+            env.port = options.port;
+            startPhantom();
+        } else {
+
+            var trials = 0,
+                getFreePort = function(onPortReady) {
+
+                    var server = net.createServer(),
+                        port = 0;
+
+                    server.on('listening', function() {
+                        port = server.address().port;
+                        server.close();
+                    });
+                    server.on('close', function() {
+                        onPortReady(port);
+                    });
+                    server.listen(0, '127.0.0.1');
+
+                },
+                onPortReady = function(port) {
+
+                    options.port = port;
+                    env.port = options.port;console.log(port);
+                    startPhantom(function() {
+
+                        trials++;
+                        if(trials < MAX_PORT_TRIALS) {
+                            startPhantom(getFreePort(onPortReady));
+                        } else {
+                            return callback("No free port found");
+                        }
+
+                    });
+
+                };
+
+            getFreePort(onPortReady);
+
+        }
+
     };
 
     spawnPhantom(function (err, phantom, port) {
